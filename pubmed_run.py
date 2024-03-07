@@ -6,9 +6,16 @@ from pyspark.sql.types import StringType, StructType, StructField, IntegerType, 
 import spacy
 from spacy.matcher import DependencyMatcher
 from typing import List
+import os
+import sys
 
-spark = SparkSession.builder \
-    .appName("entox run on pubmed") \
+#os.environ['PYSPARK_PYTHON'] = sys.executable
+#os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
+
+spark = SparkSession.builder\
+    .appName("entox run on pubmed")\
+    .config("spark.executor.memory", "4g")\
+    .config("spark.driver.memory", "2g")\
     .getOrCreate()
     
 pubmed = bb.assets('pubmed').pubmed_parquet
@@ -22,22 +29,24 @@ def build_abstracttext(json_string):
     try:
         parsed_json = json.loads(json_string)
         title = parsed_json["MedlineCitation"]["Article"].get("ArticleTitle", "")
-        abstract = parsed_json["MedlineCitation"]["Article"]["Abstract"].get("AbstractText", "")
-        if '@Label' in abstract[0]:
+        abstract = parsed_json["MedlineCitation"]["Article"].get("Abstract",{}).get("AbstractText", "")
+        #'\n'.join(abstract) if isinstance(abstract, list) else \
+        #   '\n'.join(abstract.values()) if isinstance(abstract, dict) else abstract
+        if isinstance(abstract, list) and '@Label' in abstract[0]:
             # De-nest abstract text further 
             abstract = " ".join([item["#text"] for item in abstract])
         # Make sure to return a string, even if the title is missing
         return f"{title}", f"{abstract}"
     except Exception as e:
         # Log the error for debugging
-        print("Error:", str(e))
-        return "Error in JSON parsing"
+        print("Error:", e)
+        return "Error", str(e)
 
 # Selecting a small sample for testing
 sample_df = df.limit(100)       
 sample_df.show(10)
 # showing specific cell value (row i col j) without collecting entire pyspark df
-# sample_df.limit(i+1).collect()[i][j]
+# sample_sample_df.limit(i+1).collect()[i][j]
 
 #TODO: fix abstracts where parsing is different
 
@@ -54,7 +63,7 @@ sample_df = sample_df.select(
     F.col("parsed_columns.title").alias("title"),
     F.col("parsed_columns.abstract").alias("abstract")
     )
-sample_df.show(10)
+sample_df.show(20)
 
 # 3. RUN NLP ENTOX MODEL ON ALL ABSTRACTS TEXT ==============================================
 
