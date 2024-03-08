@@ -6,11 +6,7 @@ from pyspark.sql.types import StringType, StructType, StructField, IntegerType, 
 import spacy
 from spacy.matcher import DependencyMatcher
 from typing import List
-import os
-import sys
 
-#os.environ['PYSPARK_PYTHON'] = sys.executable
-#os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
 
 spark = SparkSession.builder\
     .appName("entox run on pubmed")\
@@ -20,7 +16,11 @@ spark = SparkSession.builder\
     
 pubmed = bb.assets('pubmed').pubmed_parquet
 df = spark.read.parquet(pubmed)
-
+# Selecting a small sample for testing
+sample_df = df.limit(200)       
+sample_df.show(10)
+# showing specific cell value (row i col j) without collecting entire pyspark df
+# sample_df.limit(i+1).collect()[i][j]
 # 2. BUILD A TITLE ABSTRACT DATAFRAME ==============================================
 
 # UDF to extract full abstract and title from JSON
@@ -29,24 +29,24 @@ def build_abstracttext(json_string):
     try:
         parsed_json = json.loads(json_string)
         title = parsed_json["MedlineCitation"]["Article"].get("ArticleTitle", "")
+        #de-nest title
+        if isinstance(title,dict):
+            title = title["#text"]
         abstract = parsed_json["MedlineCitation"]["Article"].get("Abstract",{}).get("AbstractText", "")
         #'\n'.join(abstract) if isinstance(abstract, list) else \
         #   '\n'.join(abstract.values()) if isinstance(abstract, dict) else abstract
         if isinstance(abstract, list) and '@Label' in abstract[0]:
             # De-nest abstract text further 
             abstract = " ".join([item["#text"] for item in abstract])
-        # Make sure to return a string, even if the title is missing
+        elif isinstance(abstract,dict) and '#text' in abstract:
+            # De-nest for other format exception
+            abstract = abstract["#text"]
+        # Make sure to return a string, even if the title/abstract is missing
         return f"{title}", f"{abstract}"
     except Exception as e:
         # Log the error for debugging
         print("Error:", e)
         return "Error", str(e)
-
-# Selecting a small sample for testing
-sample_df = df.limit(100)       
-sample_df.show(10)
-# showing specific cell value (row i col j) without collecting entire pyspark df
-# sample_sample_df.limit(i+1).collect()[i][j]
 
 #TODO: fix abstracts where parsing is different
 
