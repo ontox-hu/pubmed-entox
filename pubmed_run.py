@@ -5,6 +5,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import StringType, StructType, StructField, IntegerType, ArrayType
 import spacy
 from spacy.matcher import DependencyMatcher
+from spacy.language import Language
 from typing import List
 
 
@@ -12,6 +13,8 @@ spark = SparkSession.builder\
     .appName("entox run on pubmed")\
     .config("spark.executor.memory", "4g")\
     .config("spark.driver.memory", "2g")\
+    .config("spark.executor.memoryOverhead", "4g")\
+    .config("spark.driver.memoryOverhead", "2g")\
     .getOrCreate()
     
 pubmed = bb.assets('pubmed').pubmed_parquet
@@ -48,7 +51,6 @@ def build_abstracttext(json_string):
         print("Error:", e)
         return "Error", str(e)
 
-#TODO: fix abstracts where parsing is different
 
 # Register UDF with Spark
 build_abstract_udf = F.udf(build_abstracttext, returnType=StructType([
@@ -63,16 +65,25 @@ sample_df = sample_df.select(
     F.col("parsed_columns.title").alias("title"),
     F.col("parsed_columns.abstract").alias("abstract")
     )
+# Concatenate title and abstract with a newline in between
+sample_df = sample_df.withColumn('text', F.concat_ws('\n', sample_df.title, sample_df.abstract)) 
 sample_df.show(20)
 
 # 3. RUN NLP ENTOX MODEL ON ALL ABSTRACTS TEXT ==============================================
-
-# test df for when biobricks is not accessible
-#test_df = spark.read.option("header",True).csv("pubmed_run/test.csv")
  
 # load spacy model
 nlp = spacy.load("en_tox")
-nlp.add_pipe("merge_entities")
+#nlp.add_pipe("merge_entities")
+@Language.component("custom_merge_entities")
+def custom_merge_entities(doc):
+    with doc.retokenize() as retokenizer:
+        for ent in doc.ents:
+            attrs = {"tag": ent.root.tag, "dep": ent.root.dep}
+            retokenizer.merge(ent, attrs=attrs)
+    return doc
+
+# Updated nlp.add_pipe to use the custom merge function 
+nlp.add_pipe("custom_merge_entities", after='ner')  # Uncomment if needed
 
 def dependency_matcher(nlp, ent_cause, ent_effect): 
     '''
@@ -115,7 +126,7 @@ def dependency_matcher(nlp, ent_cause, ent_effect):
 matcher = dependency_matcher(nlp, "COMPOUND", "PHENOTYPE")
 causal_verbs = ['increase', 'produce', 'cause', 'induce', 'generate', 'effect', 'provoke', 'arouse', 'elicit', 'lead', 'trigger','derive', 'associate', 'relate', 'link', 'stem', 'originate', 'lead', 'bring', 'result', 'inhibit', 'elevate', 'diminish', "exacerbate", "decrease"]
 
-# start with sample_df from last step 2
+
 
 # create UDF 
 # TODO: udf for each function?? Does it make it faster?
@@ -129,13 +140,9 @@ def extract_relationships(sentence_doc,matcher, causal_verbs):
     rels = [(sentence_doc[match[1][1]].text,sentence_doc[match[1][0]].text,sentence_doc[match[1][2]].text)for match in matches if sentence_doc[match[1][0]].lemma_ in causal_verbs] 
     return rels
 
-def entox_parse(json_string, nlp=nlp,matcher=matcher, causal_verbs=causal_verbs): 
-    # take a json string as input and convert it to "regular" text first
-    parsed_json = json.loads(json_string)
-    #title = parsed_json["MedlineCitation"]["Article"].get("ArticleTitle", "")
-    abstract = parsed_json["MedlineCitation"]["Article"].get("AbstractText", "")
+def entox_parse(text, nlp=nlp,matcher=matcher, causal_verbs=causal_verbs): 
     # Then apply NLP
-    doc = nlp(abstract)
+    doc = nlp(text)
     sentences = extract_sentences(doc)
     docs = [nlp(sentence) for sentence in sentences]
     relations = [extract_relationships(sentence_doc,matcher, causal_verbs) for sentence_doc in docs]
@@ -143,24 +150,11 @@ def entox_parse(json_string, nlp=nlp,matcher=matcher, causal_verbs=causal_verbs)
     relations = [item for sublist in relations for item in sublist]
     return relations
 
-
-
 entox_parse_udf = F.udf(entox_parse, ArrayType(StringType()))
 
-sample_df = sample_df.withColumn("relationships", entox_parse_udf(F.col("abstract")))
-# How do we want to extract relations? 
-# Duplicate rows for each relationship, and 3 columns per relationship? 
-# Put the text of the sentence only as extra column?
-# Does it then make sense to make differnt udf functions for all sub-functions?
-# make sure if abstract returns nothing it is skipped
+sample_df_rel = sample_df.withColumn("relationships", entox_parse_udf(F.col("text")))
 
-sample_df.show(5)
+sample_df_rel.show(10)
 
-### ERROR MESSAGE ###
-"""at org.apache.spark.api.python.BasePythonRunner$WriterThread.run(PythonRunner.scala:282)
-Caused by: java.lang.RuntimeException: Cannot reserve additional contiguous bytes in the
-vectorized reader (requested 50686118 bytes). As a workaround, you can reduce the vectorized 
-reader batch size, or disable the vectorized reader, or disable spark.sql.sources.bucketing.enabled 
-if you read from bucket table. For Parquet file format, refer to spark.sql.parquet.columnarReaderBatchSize 
-(default 4096) and spark.sql.parquet.enableVectorizedReader; for ORC file format, refer to 
-spark.sql.orc.columnarReaderBatchSize (default 4096) and spark.sql.orc.enableVectorizedReader."""
+# Stop spark session
+spark.stop()
