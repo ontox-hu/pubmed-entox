@@ -6,6 +6,7 @@ from pyspark.sql.types import StringType, StructType, StructField, IntegerType, 
 import spacy
 from spacy.matcher import DependencyMatcher
 from spacy.language import Language
+from negspacy.negation import Negex
 from typing import List
 
 
@@ -70,21 +71,20 @@ sample_df = sample_df.withColumn('text', F.concat_ws('\n', sample_df.title, samp
 sample_df.show(20)
 
 # 3. RUN NLP ENTOX MODEL ON ALL ABSTRACTS TEXT ==============================================
- 
+
+#Running below once to package the model in one go with merge_entities
 # load spacy model
-nlp = spacy.load("en_tox")
-#nlp.add_pipe("merge_entities")
-@Language.component("custom_merge_entities")
-def custom_merge_entities(doc):
-    with doc.retokenize() as retokenizer:
-        for ent in doc.ents:
-            attrs = {"tag": ent.root.tag, "dep": ent.root.dep}
-            retokenizer.merge(ent, attrs=attrs)
-    return doc
+# nlp = spacy.load("en_tox")
+# Add merge entities so that the semantic parser for relex functions properly
+# nlp.add_pipe("merge_entities")
+# Add negation to find out if phenotypes are *not* happening
+# doesn't seem to be working properly
+#nlp.add_pipe("negex", config={"ent_types":["PHENOTYPE"]}, after="merge_entities")
+# nlp.to_disk("/path/to/en_tox_merge")
 
 # Updated nlp.add_pipe to use the custom merge function 
-nlp.add_pipe("custom_merge_entities", after='ner')  # Uncomment if needed
-
+# nlp.add_pipe("custom_merge_entities", after='ner')
+nlp = spacy.load("/path/to/en_tox_merge")
 def dependency_matcher(nlp, ent_cause, ent_effect): 
     '''
     Input:
@@ -150,7 +150,14 @@ def entox_parse(text, nlp=nlp,matcher=matcher, causal_verbs=causal_verbs):
     relations = [item for sublist in relations for item in sublist]
     return relations
 
-entox_parse_udf = F.udf(entox_parse, ArrayType(StringType()))
+# Define a schema that matches the relationships tuple's structure
+schema_rels = StructType([
+    StructField("cause", StringType(), nullable=False),
+    StructField("verb", StringType(), nullable=False),
+    StructField("effect", StringType(), nullable=False)
+])
+
+entox_parse_udf = F.udf(entox_parse, ArrayType(schema_rels))
 
 sample_df_rel = sample_df.withColumn("relationships", entox_parse_udf(F.col("text")))
 
