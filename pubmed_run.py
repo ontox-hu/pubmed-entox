@@ -137,7 +137,7 @@ def extract_sentences(doc) -> List[str]:
 def extract_relationships(sentence_doc,matcher, causal_verbs):
     matches = matcher(sentence_doc)
     # extract (cause, verb, effect) triplets from a sentence, filtering for causal verbs
-    rels = [(sentence_doc[match[1][1]].text,sentence_doc[match[1][0]].text,sentence_doc[match[1][2]].text)for match in matches if sentence_doc[match[1][0]].lemma_ in causal_verbs] 
+    rels = [(sentence_doc[match[1][1]].text,sentence_doc[match[1][0]].lemma_,sentence_doc[match[1][2]].text)for match in matches if sentence_doc[match[1][0]].lemma_ in causal_verbs] 
     return rels
 
 def entox_parse(text, nlp=nlp,matcher=matcher, causal_verbs=causal_verbs): 
