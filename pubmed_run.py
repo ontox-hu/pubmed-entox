@@ -12,8 +12,8 @@ from typing import List
 
 spark = SparkSession.builder\
     .appName("entox run on pubmed")\
-    .config("spark.executor.memory", "4g")\
-    .config("spark.driver.memory", "2g")\
+    .config("spark.executor.memory", "32g")\
+    .config("spark.driver.memory", "32g")\
     .config("spark.executor.memoryOverhead", "4g")\
     .config("spark.driver.memoryOverhead", "2g")\
     .getOrCreate()
@@ -21,8 +21,8 @@ spark = SparkSession.builder\
 pubmed = bb.assets('pubmed').pubmed_parquet
 df = spark.read.parquet(pubmed)
 # Selecting a small sample for testing
-sample_df = df.limit(200)       
-sample_df.show(10)
+sample_df = df       
+# sample_df.show(10)
 # showing specific cell value (row i col j) without collecting entire pyspark df
 # sample_df.limit(i+1).collect()[i][j]
 # 2. BUILD A TITLE ABSTRACT DATAFRAME ==============================================
@@ -68,23 +68,23 @@ sample_df = sample_df.select(
     )
 # Concatenate title and abstract with a newline in between
 sample_df = sample_df.withColumn('text', F.concat_ws('\n', sample_df.title, sample_df.abstract)) 
-sample_df.show(20)
+#sample_df.show(20)
 
 # 3. RUN NLP ENTOX MODEL ON ALL ABSTRACTS TEXT ==============================================
 
-#Running below once to package the model in one go with merge_entities
+# Running below once to package the model in one go with merge_entities
 # load spacy model
 # nlp = spacy.load("en_tox")
 # Add merge entities so that the semantic parser for relex functions properly
 # nlp.add_pipe("merge_entities")
 # Add negation to find out if phenotypes are *not* happening
 # doesn't seem to be working properly
-#nlp.add_pipe("negex", config={"ent_types":["PHENOTYPE"]}, after="merge_entities")
+# nlp.add_pipe("negex", config={"ent_types":["PHENOTYPE"]}, after="merge_entities")
 # nlp.to_disk("/path/to/en_tox_merge")
 
 # Updated nlp.add_pipe to use the custom merge function 
 # nlp.add_pipe("custom_merge_entities", after='ner')
-nlp = spacy.load("/path/to/en_tox_merge")
+nlp = spacy.load("en_tox_merge")
 def dependency_matcher(nlp, ent_cause, ent_effect): 
     '''
     Input:
@@ -161,7 +161,10 @@ entox_parse_udf = F.udf(entox_parse, ArrayType(schema_rels))
 
 sample_df_rel = sample_df.withColumn("relationships", entox_parse_udf(F.col("text")))
 
-sample_df_rel.show(10)
-
+#sample_df_rel.show(50)
+df_rel_filtered = sample_df_rel.filter(F.size(sample_df_rel["relationships"])>0)
+df_rel_filtered.write.parquet("rels.parquet")
+#df = spark.read.parquet("sample_rel.parquet")
+#df.show(5)
 # Stop spark session
 spark.stop()
