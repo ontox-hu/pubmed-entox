@@ -9,6 +9,7 @@ from spacy.language import Language
 from negspacy.negation import Negex
 from typing import List
 
+# Define spark session - needs enough memory to go through entire PubMed
 
 spark = SparkSession.builder\
     .appName("entox run on pubmed")\
@@ -20,11 +21,7 @@ spark = SparkSession.builder\
     
 pubmed = bb.assets('pubmed').pubmed_parquet
 df = spark.read.parquet(pubmed)
-# Selecting a small sample for testing
-sample_df = df       
-# sample_df.show(10)
-# showing specific cell value (row i col j) without collecting entire pyspark df
-# sample_df.limit(i+1).collect()[i][j]
+
 # 2. BUILD A TITLE ABSTRACT DATAFRAME ==============================================
 
 # UDF to extract full abstract and title from JSON
@@ -60,15 +57,15 @@ build_abstract_udf = F.udf(build_abstracttext, returnType=StructType([
     ]))
 
 # Apply the UDF to create new columns
-sample_df = sample_df.withColumn("parsed_columns", build_abstract_udf(F.col("json")))
-sample_df = sample_df.select(
+df_abstract = df.withColumn("parsed_columns", build_abstract_udf(F.col("json")))
+df_abstract = df_abstract.select(
     F.col("PMID"),
     F.col("parsed_columns.title").alias("title"),
     F.col("parsed_columns.abstract").alias("abstract")
     )
 # Concatenate title and abstract with a newline in between
-sample_df = sample_df.withColumn('text', F.concat_ws('\n', sample_df.title, sample_df.abstract)) 
-#sample_df.show(20)
+df_abstract = df_abstract.withColumn('text', F.concat_ws('\n', df_abstract.title, df_abstract.abstract)) 
+
 
 # 3. RUN NLP ENTOX MODEL ON ALL ABSTRACTS TEXT ==============================================
 
@@ -76,15 +73,15 @@ sample_df = sample_df.withColumn('text', F.concat_ws('\n', sample_df.title, samp
 # load spacy model
 # nlp = spacy.load("en_tox")
 # Add merge entities so that the semantic parser for relex functions properly
-# nlp.add_pipe("merge_entities")
-# Add negation to find out if phenotypes are *not* happening
+# nlp.add_pipe("merge_entities", after='ner')
+# Add negation to find out if phenotypes are *not* happening?
 # doesn't seem to be working properly
 # nlp.add_pipe("negex", config={"ent_types":["PHENOTYPE"]}, after="merge_entities")
 # nlp.to_disk("/path/to/en_tox_merge")
 
-# Updated nlp.add_pipe to use the custom merge function 
-# nlp.add_pipe("custom_merge_entities", after='ner')
+# Load spaCy model with merge entities module
 nlp = spacy.load("en_tox_merge")
+
 def dependency_matcher(nlp, ent_cause, ent_effect): 
     '''
     Input:
@@ -123,13 +120,12 @@ def dependency_matcher(nlp, ent_cause, ent_effect):
     matcher.add("LINKING_VERB", [pattern])
     return matcher
 
+# Define entities for relationships of interest and causal verbs
 matcher = dependency_matcher(nlp, "COMPOUND", "PHENOTYPE")
 causal_verbs = ['increase', 'produce', 'cause', 'induce', 'generate', 'effect', 'provoke', 'arouse', 'elicit', 'lead', 'trigger','derive', 'associate', 'relate', 'link', 'stem', 'originate', 'lead', 'bring', 'result', 'inhibit', 'elevate', 'diminish', "exacerbate", "decrease"]
 
 
-
-# create UDF 
-# TODO: udf for each function?? Does it make it faster?
+# Relationship extraction functions
 def extract_sentences(doc) -> List[str]:  
     sentences = [sent.text for sent in doc.sents]
     return sentences
@@ -157,14 +153,16 @@ schema_rels = StructType([
     StructField("effect", StringType(), nullable=False)
 ])
 
+# Create UDF
 entox_parse_udf = F.udf(entox_parse, ArrayType(schema_rels))
 
-sample_df_rel = sample_df.withColumn("relationships", entox_parse_udf(F.col("text")))
+df_rel = sample_df.withColumn("relationships", entox_parse_udf(F.col("text")))
 
-#sample_df_rel.show(50)
-df_rel_filtered = sample_df_rel.filter(F.size(sample_df_rel["relationships"])>0)
+# Filter for abstracts that do contain relationships
+df_rel_filtered = df_rel.filter(F.size(df_rel["relationships"])>0)
+
+# Save abstracts + relationships in parquet file
 df_rel_filtered.write.parquet("rels.parquet")
-#df = spark.read.parquet("sample_rel.parquet")
-#df.show(5)
+
 # Stop spark session
 spark.stop()
