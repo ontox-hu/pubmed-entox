@@ -164,5 +164,44 @@ df_rel_filtered = df_rel.filter(F.size(df_rel["relationships"])>0)
 # Save abstracts + relationships in parquet file
 df_rel_filtered.write.parquet("rels.parquet")
 
+
+df_rel_filtered = spark.read.parquet("rels.parquet")
+
+# 1 relationship per row
+df_exploded = df_rel_filtered.withColumn("relationship", F.explode(F.col("relationships")))
+
+# Select the exploded "relationship" column and expand its fields
+df_final = df_exploded.select(
+    F.col("PMID"),
+    F.col("title"),
+    F.col("abstract"),
+    F.col("relationship.cause").alias("cause"),
+    F.col("relationship.verb").alias("verb"),
+    F.col("relationship.effect").alias("effect")
+)
+
+# Harmonize entities so that they are all capitalized
+def capitalize_words(text):
+    # Split the text into words
+    words = text.split()
+    # Capitalize the first letter of each word if it's not all uppercase
+    capitalized_words = [word.capitalize() if not word.isupper() else word for word in words]
+    # Join the words back into a single string
+    return ' '.join(capitalized_words)
+
+# Register the UDF with PySpark
+capitalize_words_udf = F.udf(capitalize_words, StringType())
+
+# Apply to dataframe
+df_final = df_final.withColumn("cause", capitalize_words_udf(F.col("cause"))) \
+                   .withColumn("effect", capitalize_words_udf(F.col("verb")))
+
+# Save dataframe
+# df_final.write.parquet("rels.parquet")
+
+#TODO:
+# Load into a neo4j instance to inspect results? Maybe at least liver cases
+# Or is there a better way to investigate results?
+
 # Stop spark session
 spark.stop()
