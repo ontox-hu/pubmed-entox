@@ -25,7 +25,6 @@ df = spark.read.parquet(pubmed)
 # 2. BUILD A TITLE ABSTRACT DATAFRAME ==============================================
 
 # UDF to extract full abstract and title from JSON
-#TODO: also extract author list and year?
 def build_abstracttext(json_string):
     try:
         parsed_json = json.loads(json_string)
@@ -74,9 +73,6 @@ df_abstract = df_abstract.withColumn('text', F.concat_ws('\n', df_abstract.title
 # nlp = spacy.load("en_tox")
 # Add merge entities so that the semantic parser for relex functions properly
 # nlp.add_pipe("merge_entities", after='ner')
-# Add negation to find out if phenotypes are *not* happening?
-# doesn't seem to be working properly
-# nlp.add_pipe("negex", config={"ent_types":["PHENOTYPE"]}, after="merge_entities")
 # nlp.to_disk("/path/to/en_tox_merge")
 
 # Load spaCy model with merge entities module
@@ -137,7 +133,7 @@ def extract_relationships(sentence_doc,matcher, causal_verbs):
     return rels
 
 def entox_parse(text, nlp=nlp,matcher=matcher, causal_verbs=causal_verbs): 
-    # Then apply NLP
+    # Function to apply NLP process to text
     doc = nlp(text)
     sentences = extract_sentences(doc)
     docs = [nlp(sentence) for sentence in sentences]
@@ -164,7 +160,7 @@ df_rel_filtered = df_rel.filter(F.size(df_rel["relationships"])>0)
 # Save abstracts + relationships in parquet file
 df_rel_filtered.write.parquet("rels.parquet")
 
-
+# 4. CLEAN UP DATAFRAME TO HAVE ONE RELATIONSHIP PER ROW ==============================================
 df_rel_filtered = spark.read.parquet("rels.parquet")
 
 # 1 relationship per row
@@ -197,11 +193,8 @@ df_final = df_final.withColumn("cause", capitalize_words_udf(F.col("cause"))) \
                    .withColumn("effect", capitalize_words_udf(F.col("verb")))
 
 # Save dataframe
-# df_final.write.parquet("rels.parquet")
+df_final.write.parquet("rels.parquet")
 
-#TODO:
-# Load into a neo4j instance to inspect results? Maybe at least liver cases
-# Or is there a better way to investigate results?
 
 # Stop spark session
 spark.stop()
